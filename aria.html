@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Aria — Voice Agent</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #080a0f;
+    --surface: #0e1118;
+    --surface2: #12161f;
+    --border: #1e2433;
+    --accent: #00e5ff;
+    --accent2: #7b61ff;
+    --text: #e8eaf0;
+    --muted: #5a6070;
+    --danger: #ff4060;
+    --green: #00ffaa;
+    --orange: #ffaa00;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Space Mono', monospace;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none; z-index: 0; opacity: 0.6;
+  }
+  body::after {
+    content: '';
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(var(--border) 1px, transparent 1px),
+      linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size: 48px 48px;
+    pointer-events: none; z-index: 0; opacity: 0.3;
+  }
+
+  .blob {
+    position: fixed; width: 600px; height: 600px;
+    border-radius: 50%; filter: blur(120px); pointer-events: none; z-index: 0;
+  }
+  .blob-1 { background: radial-gradient(circle, rgba(0,229,255,0.07) 0%, transparent 70%); top: -200px; left: -100px; animation: drift1 18s ease-in-out infinite alternate; }
+  .blob-2 { background: radial-gradient(circle, rgba(123,97,255,0.06) 0%, transparent 70%); bottom: -200px; right: -100px; animation: drift2 22s ease-in-out infinite alternate; }
+  @keyframes drift1 { to { transform: translate(80px, 60px); } }
+  @keyframes drift2 { to { transform: translate(-60px, -80px); } }
+
+  /* ── LAYOUT ── */
+  .page { position: relative; z-index: 1; min-height: 100vh; display: flex; flex-direction: column; }
+
+  header {
+    padding: 20px 36px;
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(12px);
+    flex-shrink: 0;
+  }
+  .logo { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 1.4rem; letter-spacing: -0.02em; }
+  .logo span { color: var(--accent); }
+
+  .header-right { display: flex; align-items: center; gap: 12px; }
+
+  .conn-pill {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 0.7rem; color: var(--muted);
+    border: 1px solid var(--border); padding: 5px 12px;
+    border-radius: 999px; background: rgba(255,255,255,0.02);
+    transition: all 0.3s;
+  }
+  .conn-pill.connected    { color: var(--green);  border-color: rgba(0,255,170,0.3); }
+  .conn-pill.connecting   { color: var(--orange); border-color: rgba(255,170,0,0.3); }
+  .conn-pill.disconnected { color: var(--danger); border-color: rgba(255,64,96,0.3); }
+  .conn-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .conn-pill.connected .conn-dot { animation: dotPulse 2s ease-in-out infinite; }
+  @keyframes dotPulse {
+    0%,100% { box-shadow: 0 0 0 0 rgba(0,255,170,0.4); }
+    50% { box-shadow: 0 0 0 5px rgba(0,255,170,0); }
+  }
+
+  /* ── MAIN BODY ── */
+  .body {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    gap: 0;
+    overflow: hidden;
+  }
+
+  /* ── SIDEBAR ── */
+  .sidebar {
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+
+  .sidebar-section {
+    border-bottom: 1px solid var(--border);
+    padding: 14px 16px;
+  }
+  .sidebar-title {
+    font-size: 0.62rem; letter-spacing: 0.15em;
+    text-transform: uppercase; color: var(--muted);
+    margin-bottom: 10px; display: flex; align-items: center; gap: 8px;
+  }
+  .sidebar-title svg { opacity: 0.5; }
+
+  /* Panel list */
+  .panel-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; flex: 1; padding: 12px 16px; }
+  .panel-item {
+    font-size: 0.72rem; color: var(--muted);
+    padding: 6px 10px; border-radius: 6px;
+    border: 1px solid transparent;
+    cursor: pointer; transition: all 0.15s;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .panel-item:hover { color: var(--text); background: rgba(255,255,255,0.03); border-color: var(--border); }
+  .panel-item.active { color: var(--accent); background: rgba(0,229,255,0.05); border-color: rgba(0,229,255,0.2); }
+  .panel-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--border); flex-shrink: 0; }
+  .panel-item.active .panel-dot { background: var(--accent); }
+
+  /* Alerts */
+  .alert-list { display: flex; flex-direction: column; gap: 6px; padding: 0 16px 12px; }
+  .alert-item {
+    font-size: 0.7rem; color: var(--orange);
+    background: rgba(255,170,0,0.06);
+    border: 1px solid rgba(255,170,0,0.2);
+    border-radius: 6px; padding: 8px 10px; line-height: 1.5;
+    animation: alertIn 0.3s ease;
+  }
+  @keyframes alertIn { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
+  .no-alerts { font-size: 0.7rem; color: var(--muted); font-style: italic; padding: 0 16px 12px; }
+
+  /* ── CHAT AREA ── */
+  .chat-area {
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+
+  /* Hero strip */
+  .hero-strip {
+    padding: 28px 32px 20px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .hero-tag {
+    font-size: 0.65rem; letter-spacing: 0.2em; color: var(--accent);
+    text-transform: uppercase; margin-bottom: 8px;
+    opacity: 0; animation: fadeUp 0.5s 0.1s forwards;
+  }
+  .hero-title {
+    font-family: 'Syne', sans-serif; font-weight: 800;
+    font-size: clamp(1.8rem, 3vw, 2.8rem); line-height: 1;
+    letter-spacing: -0.03em;
+    opacity: 0; animation: fadeUp 0.5s 0.2s forwards;
+  }
+  .hero-title .glow { color: var(--accent); text-shadow: 0 0 30px rgba(0,229,255,0.35); }
+  .hero-title .dim  { color: var(--muted); }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: none; }
+  }
+
+  /* Titlebar */
+  .card-titlebar {
+    background: rgba(255,255,255,0.015);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 20px;
+    display: flex; align-items: center; gap: 10px;
+    flex-shrink: 0;
+  }
+  .dot-row { display: flex; gap: 5px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .dot.red    { background: #ff5f57; }
+  .dot.yellow { background: #febc2e; }
+  .dot.green  { background: #28c840; }
+
+  .state-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 0.62rem; letter-spacing: 0.12em; text-transform: uppercase;
+    padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border);
+    color: var(--muted); transition: all 0.3s;
+  }
+  .state-badge.listening { color: var(--green);  border-color: rgba(0,255,170,0.3); }
+  .state-badge.thinking  { color: var(--orange); border-color: rgba(255,170,0,0.3); }
+  .state-badge.speaking  { color: var(--accent); border-color: rgba(0,229,255,0.3); }
+  .state-badge-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+
+  .titlebar-label { font-size: 0.7rem; color: var(--muted); margin-left: auto; letter-spacing: 0.08em; }
+
+  /* Grafana link */
+  .grafana-link {
+    font-size: 0.65rem; color: var(--muted); text-decoration: none;
+    display: flex; align-items: center; gap: 4px;
+    padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border);
+    transition: all 0.15s;
+  }
+  .grafana-link:hover { color: var(--accent); border-color: rgba(0,229,255,0.3); }
+
+  /* Chat log */
+  .chat-log {
+    flex: 1; overflow-y: auto; padding: 20px 24px;
+    display: flex; flex-direction: column; gap: 14px;
+    scroll-behavior: smooth;
+  }
+  .chat-log::-webkit-scrollbar { width: 4px; }
+  .chat-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  .msg { display: flex; gap: 10px; animation: msgIn 0.25s ease; }
+  @keyframes msgIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: none; }
+  }
+  .msg-label {
+    font-size: 0.65rem; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; min-width: 48px; padding-top: 2px; flex-shrink: 0;
+  }
+  .msg.aria .msg-label { color: var(--accent); }
+  .msg.user .msg-label { color: var(--accent2); }
+  .msg.sys  .msg-label { color: var(--muted); }
+  .msg.alert-msg .msg-label { color: var(--orange); }
+
+  .msg-text { font-size: 0.82rem; line-height: 1.65; color: var(--text); }
+  .msg.sys   .msg-text { color: var(--muted); font-style: italic; }
+  .msg.alert-msg .msg-text { color: var(--orange); }
+
+  .typing-dots span {
+    display: inline-block; width: 5px; height: 5px; border-radius: 50%;
+    background: var(--accent); margin: 0 2px;
+    animation: bounce 1.2s ease-in-out infinite;
+  }
+  .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes bounce {
+    0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+    40% { transform: translateY(-5px); opacity: 1; }
+  }
+
+  /* Transcript bar */
+  .transcript-bar {
+    border-top: 1px solid var(--border);
+    padding: 9px 24px;
+    font-size: 0.73rem; color: var(--muted); font-style: italic;
+    min-height: 32px; display: flex; align-items: center; gap: 8px;
+    transition: color 0.2s; flex-shrink: 0;
+  }
+  .transcript-bar.active { color: var(--accent2); font-style: normal; }
+  .cursor-blink {
+    display: inline-block; width: 6px; height: 12px;
+    background: var(--accent2); border-radius: 1px;
+    animation: blink 1s step-end infinite; vertical-align: middle; margin-left: 2px;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* Mic panel */
+  .mic-panel {
+    border-top: 1px solid var(--border);
+    padding: 16px 24px;
+    display: flex; align-items: center; gap: 14px;
+    background: rgba(255,255,255,0.01); flex-shrink: 0;
+  }
+  .waveform {
+    flex: 1; height: 32px;
+    display: flex; align-items: center; gap: 2px; padding: 0 4px;
+  }
+  .wave-bar { flex: 1; background: var(--border); border-radius: 2px; height: 3px; }
+  .waveform.listening .wave-bar { animation: waveAnim 0.8s ease-in-out infinite; background: var(--green); opacity: 0.7; }
+  .waveform.speaking  .wave-bar { animation: waveAnim 0.45s ease-in-out infinite; background: var(--accent); opacity: 0.8; }
+  .waveform.thinking  .wave-bar { animation: waveAnim 1.4s ease-in-out infinite; background: var(--orange); opacity: 0.5; }
+  .waveform.listening .wave-bar:nth-child(odd),
+  .waveform.speaking  .wave-bar:nth-child(odd),
+  .waveform.thinking  .wave-bar:nth-child(odd)  { animation-delay: 0.1s; }
+  .waveform.listening .wave-bar:nth-child(3n),
+  .waveform.speaking  .wave-bar:nth-child(3n),
+  .waveform.thinking  .wave-bar:nth-child(3n)   { animation-delay: 0.2s; }
+  .waveform.listening .wave-bar:nth-child(4n),
+  .waveform.speaking  .wave-bar:nth-child(4n),
+  .waveform.thinking  .wave-bar:nth-child(4n)   { animation-delay: 0.3s; }
+  @keyframes waveAnim { 0%,100% { height: 3px; } 50% { height: 22px; } }
+
+  .mic-status { font-size: 0.7rem; color: var(--muted); min-width: 100px; text-align: right; transition: color 0.3s; }
+  .mic-status.listening { color: var(--green); }
+  .mic-status.speaking  { color: var(--accent); }
+  .mic-status.thinking  { color: var(--orange); }
+
+  footer {
+    padding: 14px 36px;
+    border-top: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 0.65rem; color: var(--muted); flex-shrink: 0;
+  }
+  .tech-badges { display: flex; gap: 16px; }
+  .badge { display: flex; align-items: center; gap: 5px; }
+  .badge-dot { width: 5px; height: 5px; border-radius: 50%; }
+
+  /* ── OFFLINE BANNER ── */
+  .offline-toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: rgba(255,64,96,0.12); border: 1px solid rgba(255,64,96,0.3);
+    color: var(--danger); font-size: 0.75rem; padding: 10px 20px;
+    border-radius: 8px; display: none; z-index: 100;
+    backdrop-filter: blur(8px);
+  }
+  .offline-toast.visible { display: block; animation: toastIn 0.3s ease; }
+  @keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+
+  @media (max-width: 700px) {
+    .body { grid-template-columns: 1fr; }
+    .sidebar { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="blob blob-1"></div>
+<div class="blob blob-2"></div>
+
+<div class="page">
+  <!-- HEADER -->
+  <header>
+    <div class="logo">A<span>ria</span></div>
+    <div class="header-right">
+      <a class="grafana-link" href="https://ringthebot.grafana.net/d/ar7xnkm/mock-observability-dashboard" target="_blank">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+        Grafana
+      </a>
+      <div class="conn-pill connecting" id="connPill">
+        <div class="conn-dot"></div>
+        <span id="connLabel">Connecting...</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- BODY -->
+  <div class="body">
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+
+      <!-- Dashboard panels -->
+      <div class="sidebar-section">
+        <div class="sidebar-title">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+          Dashboard Panels
+        </div>
+      </div>
+      <div class="panel-list" id="panelList">
+        <div style="font-size:0.7rem;color:var(--muted);font-style:italic;">Waiting for agent...</div>
+      </div>
+
+      <!-- Anomaly alerts -->
+      <div class="sidebar-section" style="margin-top:auto;">
+        <div class="sidebar-title">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          Anomaly Alerts
+        </div>
+      </div>
+      <div id="alertContainer">
+        <div class="no-alerts" id="noAlerts">No anomalies detected</div>
+        <div class="alert-list" id="alertList"></div>
+      </div>
+
+    </aside>
+
+    <!-- CHAT AREA -->
+    <div class="chat-area">
+
+      <div class="hero-strip">
+        <div class="hero-tag">Observability voice agent</div>
+        <h1 class="hero-title">Talk to <span class="glow">Aria</span><span class="dim">.</span></h1>
+      </div>
+
+      <div class="card-titlebar">
+        <div class="dot-row">
+          <div class="dot red"></div>
+          <div class="dot yellow"></div>
+          <div class="dot green"></div>
+        </div>
+        <span class="state-badge" id="stateBadge">
+          <span class="state-badge-dot"></span>
+          <span id="stateLabel">offline</span>
+        </span>
+        <span class="titlebar-label">aria — live session</span>
+      </div>
+
+      <div class="chat-log" id="chatLog">
+        <div class="msg sys">
+          <span class="msg-label">SYS</span>
+          <span class="msg-text">Connecting to agent.py on ws://localhost:8765...</span>
+        </div>
+      </div>
+
+      <div class="transcript-bar" id="transcriptBar">
+        Live transcript will appear here...
+      </div>
+
+      <div class="mic-panel">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="9" y="2" width="6" height="12" rx="3"/>
+          <path d="M5 10a7 7 0 0 0 14 0"/>
+          <line x1="12" y1="19" x2="12" y2="22"/>
+          <line x1="8" y1="22" x2="16" y2="22"/>
+        </svg>
+        <div class="waveform" id="waveform"></div>
+        <div class="mic-status" id="micStatus">Waiting for agent</div>
+      </div>
+
+    </div>
+  </div>
+
+  <footer>
+    <span>Aria Voice Agent — Mock Observability Dashboard</span>
+    <div class="tech-badges">
+      <div class="badge"><div class="badge-dot" style="background:var(--orange)"></div>Grafana</div>
+      <div class="badge"><div class="badge-dot" style="background:var(--accent)"></div>Speechmatics</div>
+      <div class="badge"><div class="badge-dot" style="background:var(--accent2)"></div>Backboard</div>
+      <div class="badge"><div class="badge-dot" style="background:var(--green)"></div>OpenAI TTS</div>
+    </div>
+  </footer>
+</div>
+
+<div class="offline-toast" id="offlineToast">
+  ⚠ agent.py not running — start it with <code>python agent.py</code>
+</div>
+
+<script>
+  // ── Waveform bars ──
+  const waveform = document.getElementById('waveform');
+  for (let i = 0; i < 28; i++) {
+    const b = document.createElement('div');
+    b.className = 'wave-bar';
+    waveform.appendChild(b);
+  }
+
+  // ── Elements ──
+  const chatLog        = document.getElementById('chatLog');
+  const transcriptBar  = document.getElementById('transcriptBar');
+  const connPill       = document.getElementById('connPill');
+  const connLabel      = document.getElementById('connLabel');
+  const stateBadge     = document.getElementById('stateBadge');
+  const stateLabel     = document.getElementById('stateLabel');
+  const micStatus      = document.getElementById('micStatus');
+  const offlineToast   = document.getElementById('offlineToast');
+  const panelList      = document.getElementById('panelList');
+  const alertList      = document.getElementById('alertList');
+  const noAlerts       = document.getElementById('noAlerts');
+
+  // ── Helpers ──
+  function esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function addMessage(role, text) {
+    removeTyping();
+    const div = document.createElement('div');
+    div.className = `msg ${role}`;
+    const labelMap = { aria: 'Aria', user: 'You', sys: 'SYS', 'alert-msg': 'ALERT' };
+    div.innerHTML = `<span class="msg-label">${labelMap[role] || role}</span><span class="msg-text">${esc(text)}</span>`;
+    chatLog.appendChild(div);
+    chatLog.scrollTop = chatLog.scrollHeight;
+  }
+
+  function addTyping() {
+    if (document.getElementById('typingIndicator')) return;
+    const div = document.createElement('div');
+    div.className = 'msg aria'; div.id = 'typingIndicator';
+    div.innerHTML = `<span class="msg-label">Aria</span><span class="msg-text"><span class="typing-dots"><span></span><span></span><span></span></span></span>`;
+    chatLog.appendChild(div);
+    chatLog.scrollTop = chatLog.scrollHeight;
+  }
+
+  function removeTyping() {
+    const el = document.getElementById('typingIndicator');
+    if (el) el.remove();
+  }
+
+  function setAgentState(state) {
+    waveform.className   = `waveform ${state}`;
+    stateBadge.className = `state-badge ${state}`;
+    stateLabel.textContent = state;
+    const map = { listening: 'Listening...', thinking: 'Thinking...', speaking: 'Speaking...', offline: 'Waiting for agent' };
+    micStatus.textContent = map[state] || state;
+    micStatus.className = `mic-status ${state}`;
+  }
+
+  function setConnected(yes) {
+    connPill.className = `conn-pill ${yes ? 'connected' : 'disconnected'}`;
+    connLabel.textContent = yes ? 'Connected' : 'Disconnected';
+    offlineToast.className = `offline-toast${yes ? '' : ' visible'}`;
+  }
+
+  // ── Panel sidebar ──
+  let panels = [];
+  function renderPanels(names) {
+    panels = names;
+    panelList.innerHTML = '';
+    if (!names.length) {
+      panelList.innerHTML = '<div style="font-size:0.7rem;color:var(--muted);font-style:italic;">No panels found</div>';
+      return;
+    }
+    names.forEach(name => {
+      const div = document.createElement('div');
+      div.className = 'panel-item';
+      div.innerHTML = `<div class="panel-dot"></div>${esc(name)}`;
+      div.addEventListener('click', () => {
+        // Clicking a panel name sends it as a question
+        document.querySelectorAll('.panel-item').forEach(el => el.classList.remove('active'));
+        div.classList.add('active');
+      });
+      panelList.appendChild(div);
+    });
+  }
+
+  // ── Anomaly alerts ──
+  function addAlert(anomalies) {
+    noAlerts.style.display = 'none';
+    anomalies.forEach(text => {
+      const div = document.createElement('div');
+      div.className = 'alert-item';
+      div.textContent = text;
+      alertList.appendChild(div);
+    });
+    // Also show in chat
+    addMessage('alert-msg', '⚠ ' + anomalies.join(' | '));
+  }
+
+  // ── WebSocket ──
+  const WS_URL = 'ws://localhost:8765';
+  let ws = null;
+
+  function connect() {
+    connPill.className = 'conn-pill connecting';
+    connLabel.textContent = 'Connecting...';
+
+    ws = new WebSocket(WS_URL);
+
+    ws.onopen = () => {
+      setConnected(true);
+      setAgentState('listening');
+      addMessage('sys', 'Connected to agent.py — speak to Aria!');
+    };
+
+    ws.onmessage = ({ data }) => {
+      let msg;
+      try { msg = JSON.parse(data); } catch { return; }
+
+      switch (msg.type) {
+        case 'partial':
+          transcriptBar.innerHTML = esc(msg.text) + '<span class="cursor-blink"></span>';
+          transcriptBar.className = 'transcript-bar active';
+          break;
+
+        case 'user':
+          transcriptBar.textContent = '';
+          transcriptBar.className = 'transcript-bar';
+          addMessage('user', msg.text);
+          // Highlight matching panel in sidebar
+          document.querySelectorAll('.panel-item').forEach(el => {
+            el.classList.toggle('active', msg.text.toLowerCase().includes(el.textContent.trim().toLowerCase()));
+          });
+          break;
+
+        case 'aria':
+          addMessage('aria', msg.text);
+          setAgentState('speaking');
+          break;
+
+        case 'state':
+          setAgentState(msg.state);
+          if (msg.state === 'thinking')  addTyping();
+          if (msg.state === 'listening') removeTyping();
+          break;
+
+        case 'grafana_panels':
+          renderPanels(msg.panels || []);
+          addMessage('sys', `Dashboard loaded: ${msg.panels.length} panels`);
+          break;
+
+        case 'alert':
+          addAlert(msg.anomalies || []);
+          break;
+      }
+    };
+
+    ws.onclose = () => {
+      setConnected(false);
+      setAgentState('offline');
+      addMessage('sys', 'Connection lost. Retrying in 3s...');
+      setTimeout(connect, 3000);
+    };
+  }
+
+  connect();
+</script>
+</body>
+</html>
