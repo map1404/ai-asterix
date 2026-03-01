@@ -416,6 +416,10 @@
           id="micBtn"
           style="margin-left:10px;background:var(--surface2);color:var(--text);border:1px solid var(--border);padding:8px 10px;border-radius:8px;font-family:'Space Mono',monospace;font-size:0.7rem;cursor:pointer;"
         >Start Mic</button>
+        <button
+          id="speakerBtn"
+          style="margin-left:8px;background:var(--surface2);color:var(--green);border:1px solid rgba(0,255,170,0.4);padding:8px 10px;border-radius:8px;font-family:'Space Mono',monospace;font-size:0.7rem;cursor:pointer;"
+        >Speaker On</button>
       </div>
 
       <div class="composer" style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:10px;">
@@ -473,6 +477,7 @@
   const msgInput       = document.getElementById('msgInput');
   const sendBtn        = document.getElementById('sendBtn');
   const micBtn         = document.getElementById('micBtn');
+  const speakerBtn     = document.getElementById('speakerBtn');
 
   // ── Helpers ──
   function esc(s) {
@@ -567,6 +572,26 @@
     msgInput.value = '';
   }
 
+  // ── Browser TTS ──
+  let speakerEnabled = true;
+  function setSpeakerButton(active) {
+    speakerBtn.textContent = active ? 'Speaker On' : 'Speaker Off';
+    speakerBtn.style.borderColor = active ? 'rgba(0,255,170,0.4)' : 'var(--border)';
+    speakerBtn.style.color = active ? 'var(--green)' : 'var(--muted)';
+  }
+
+  function speakText(text) {
+    if (!speakerEnabled || !('speechSynthesis' in window)) return;
+    const clean = String(text || '').trim();
+    if (!clean) return;
+    const u = new SpeechSynthesisUtterance(clean);
+    u.rate = 1;
+    u.pitch = 1;
+    u.volume = 1;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
+  }
+
   // ── Browser STT (Web Speech API) ──
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   let recognition = null;
@@ -658,6 +683,7 @@
         case 'aria':
           addMessage('aria', msg.text);
           setAgentState('speaking');
+          speakText(msg.text);
           break;
 
         case 'state':
@@ -705,6 +731,14 @@
       recognition.stop();
       addMessage('sys', 'Microphone stopped.');
     }
+  });
+
+  speakerBtn.addEventListener('click', () => {
+    speakerEnabled = !speakerEnabled;
+    if (!speakerEnabled && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    setSpeakerButton(speakerEnabled);
   });
 </script>
 </body>
