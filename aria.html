@@ -574,20 +574,69 @@
 
   // ── Browser TTS ──
   let speakerEnabled = true;
+  let preferredVoice = null;
+  let micPausedForTTS = false;
+
+  function pickPreferredVoice() {
+    if (!('speechSynthesis' in window)) return null;
+    const voices = window.speechSynthesis.getVoices() || [];
+    if (!voices.length) return null;
+
+    const preferredNames = [
+      'Google US English',
+      'Samantha',
+      'Ava',
+      'Allison',
+      'Emma',
+      'Jenny',
+      'Aria',
+    ];
+
+    for (const name of preferredNames) {
+      const v = voices.find((voice) =>
+        voice.lang.toLowerCase().startsWith('en') &&
+        voice.name.toLowerCase().includes(name.toLowerCase())
+      );
+      if (v) return v;
+    }
+
+    return voices.find((voice) => voice.lang.toLowerCase().startsWith('en')) || voices[0];
+  }
+
   function setSpeakerButton(active) {
     speakerBtn.textContent = active ? 'Speaker On' : 'Speaker Off';
     speakerBtn.style.borderColor = active ? 'rgba(0,255,170,0.4)' : 'var(--border)';
     speakerBtn.style.color = active ? 'var(--green)' : 'var(--muted)';
   }
 
+  function pauseMicForSpeech() {
+    if (!recognition || !micEnabled) return;
+    micPausedForTTS = true;
+    try { recognition.stop(); } catch {}
+  }
+
+  function resumeMicAfterSpeech() {
+    if (!recognition || !micEnabled) return;
+    micPausedForTTS = false;
+    setTimeout(() => {
+      if (!micEnabled || micPausedForTTS) return;
+      try { recognition.start(); } catch {}
+    }, 250);
+  }
+
   function speakText(text) {
     if (!speakerEnabled || !('speechSynthesis' in window)) return;
     const clean = String(text || '').trim();
     if (!clean) return;
+    pauseMicForSpeech();
     const u = new SpeechSynthesisUtterance(clean);
-    u.rate = 1;
+    u.voice = preferredVoice;
+    u.lang = (preferredVoice && preferredVoice.lang) || 'en-US';
+    u.rate = 0.95;
     u.pitch = 1;
     u.volume = 1;
+    u.onend = resumeMicAfterSpeech;
+    u.onerror = resumeMicAfterSpeech;
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(u);
   }
@@ -642,7 +691,7 @@
     };
 
     recognition.onend = () => {
-      if (micEnabled) {
+      if (micEnabled && !micPausedForTTS) {
         try { recognition.start(); } catch {}
       }
     };
@@ -714,6 +763,15 @@
   connect();
 
   initRecognition();
+  setMicButton(false);
+  setSpeakerButton(true);
+
+  if ('speechSynthesis' in window) {
+    preferredVoice = pickPreferredVoice();
+    window.speechSynthesis.onvoiceschanged = () => {
+      preferredVoice = pickPreferredVoice();
+    };
+  }
 
   sendBtn.addEventListener('click', () => sendUserMessage(msgInput.value));
   msgInput.addEventListener('keydown', (e) => {
@@ -737,6 +795,7 @@
     speakerEnabled = !speakerEnabled;
     if (!speakerEnabled && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel();
+      resumeMicAfterSpeech();
     }
     setSpeakerButton(speakerEnabled);
   });
