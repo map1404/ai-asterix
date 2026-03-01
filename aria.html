@@ -618,10 +618,11 @@
   function resumeMicAfterSpeech() {
     if (!recognition || !micEnabled) return;
     micPausedForTTS = false;
+    sttResumeAfter = Date.now() + 1200;
     setTimeout(() => {
       if (!micEnabled || micPausedForTTS) return;
       try { recognition.start(); } catch {}
-    }, 250);
+    }, 1200);
   }
 
   function speakText(text) {
@@ -646,6 +647,7 @@
   let recognition = null;
   let micEnabled = false;
   let interimText = '';
+  let sttResumeAfter = 0;
 
   function setMicButton(active) {
     micBtn.textContent = active ? 'Stop Mic' : 'Start Mic';
@@ -667,6 +669,10 @@
     recognition.interimResults = true;
 
     recognition.onresult = (event) => {
+      if (micPausedForTTS || Date.now() < sttResumeAfter || ('speechSynthesis' in window && window.speechSynthesis.speaking)) {
+        return;
+      }
+
       let finalText = '';
       interimText = '';
 
@@ -687,7 +693,7 @@
     };
 
     recognition.onerror = (event) => {
-      addMessage('sys', `Mic error: ${event.error}`);
+      if (event.error !== 'no-speech') addMessage('sys', `Mic error: ${event.error}`);
     };
 
     recognition.onend = () => {
@@ -695,6 +701,20 @@
         try { recognition.start(); } catch {}
       }
     };
+  }
+
+  function startMic() {
+    if (!recognition || micEnabled) return;
+    micEnabled = true;
+    setMicButton(true);
+    try { recognition.start(); } catch {}
+  }
+
+  function stopMic() {
+    if (!recognition || !micEnabled) return;
+    micEnabled = false;
+    setMicButton(false);
+    try { recognition.stop(); } catch {}
   }
 
   function connect() {
@@ -780,14 +800,12 @@
 
   micBtn.addEventListener('click', () => {
     if (!recognition) return;
-    micEnabled = !micEnabled;
-    setMicButton(micEnabled);
     if (micEnabled) {
-      try { recognition.start(); } catch {}
-      addMessage('sys', 'Microphone started.');
-    } else {
-      recognition.stop();
+      stopMic();
       addMessage('sys', 'Microphone stopped.');
+    } else {
+      startMic();
+      addMessage('sys', 'Microphone started.');
     }
   });
 
@@ -799,6 +817,11 @@
     }
     setSpeakerButton(speakerEnabled);
   });
+
+  // Auto-start microphone on page load.
+  setTimeout(() => {
+    if (recognition && !micEnabled) startMic();
+  }, 300);
 </script>
 </body>
 </html>
