@@ -339,7 +339,14 @@ async def anomaly_watcher(app: web.Application):
 
 async def handle_index(_request: web.Request):
     html_path = Path(__file__).with_name("aria.html")
-    return web.FileResponse(html_path)
+    return web.FileResponse(
+        html_path,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 async def handle_health(_request: web.Request):
@@ -357,7 +364,14 @@ async def handle_page(request: web.Request):
 
 async def handle_pager(_request: web.Request):
     html_path = Path(__file__).with_name("pager.html")
-    return web.FileResponse(html_path)
+    return web.FileResponse(
+        html_path,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 async def handle_incident(request: web.Request):
