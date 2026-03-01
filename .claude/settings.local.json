@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python test_github.py)",
+      "Bash(python -c \":*)"
+    ]
+  }
+}
