@@ -12,6 +12,7 @@ Speak. Press Ctrl-C to quit.
 """
 
 import asyncio
+from datetime import datetime, timezone
 import json
 import logging
 import os
@@ -33,6 +34,7 @@ from speechmatics.client import WebsocketClient
 from speechmatics.models import AudioSettings, ConnectionSettings, TranscriptionConfig
 
 from grafana import GrafanaClient
+from mcp_github import create_anomaly_issue, is_github_command
 
 # ── Setup ──────────────────────────────────────────────────────────────
 load_dotenv()
@@ -101,6 +103,9 @@ GRAFANA_TRIGGER_PHRASES = [
 def is_grafana_question(text: str) -> bool:
     t = text.lower()
     return any(phrase in t for phrase in GRAFANA_TRIGGER_PHRASES)
+
+# ── Last known anomaly (for GitHub issue body) ───────────────────────────
+_last_anomaly: str = ""
 
 # ── Connected browser clients ───────────────────────────────────────────
 _browser_clients: set = set()
@@ -217,6 +222,16 @@ async def build_grafana_context(grafana: GrafanaClient) -> str:
         return f"Could not fetch dashboard data: {e}"
 
 
+# ── GitHub issue body builder ─────────────────────────────────────────────
+def _build_issue_body(grafana_context: str) -> str:
+    parts = ["## Anomaly Report\n\n_Opened via Aria voice assistant._\n"]
+    if _last_anomaly:
+        parts.append(f"### Detected Anomalies\n```\n{_last_anomaly}\n```\n")
+    if grafana_context:
+        parts.append(f"### Dashboard Snapshot\n```\n{grafana_context}\n```\n")
+    return "\n".join(parts)
+
+
 # ── Queue-backed stream wrapper ─────────────────────────────────────────
 class QueueStream:
     def __init__(self, audio_queue: queue.Queue):
@@ -315,8 +330,10 @@ async def anomaly_watcher(grafana: GrafanaClient):
         try:
             anomalies = await grafana.detect_anomalies(ANOMALY_THRESHOLDS)
             if anomalies:
+                global _last_anomaly
                 alert_text = "Heads up — I've spotted something on the dashboard. " + \
                              ". ".join(anomalies[:3])  # cap at 3 alerts per cycle
+                _last_anomaly = "\n".join(anomalies)
                 await broadcast({"type": "alert", "anomalies": anomalies})
                 await speak(alert_text)
         except Exception as e:
@@ -388,13 +405,22 @@ async def main():
                     await broadcast({"type": "user", "text": full_text})
                     await broadcast({"type": "state", "state": "thinking"})
 
-                    # Inject live Grafana data if it's a metrics question
-                    context = ""
-                    if is_grafana_question(full_text):
-                        print("[Grafana] Fetching live data for context...")
-                        context = await build_grafana_context(grafana)
+                    # GitHub issue creation takes priority
+                    if is_github_command(full_text):
+                        print("[GitHub] Creating issue...")
+                        grafana_context = await build_grafana_context(grafana)
+                        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+                        reply = await create_anomaly_issue(
+                            f"Monitoring Alert: {ts}",
+                            _build_issue_body(grafana_context),
+                        )
+                    else:
+                        context = ""
+                        if is_grafana_question(full_text):
+                            print("[Grafana] Fetching live data for context...")
+                            context = await build_grafana_context(grafana)
+                        reply = await backboard.chat(full_text, context=context)
 
-                    reply = await backboard.chat(full_text, context=context)
                     if not reply:
                         reply = "Sorry, could you repeat that?"
                     await speak(reply)

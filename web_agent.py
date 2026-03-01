@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 import httpx
 
 from grafana import GrafanaClient
+from mcp_github import create_anomaly_issue, is_github_command
 
 
 load_dotenv()
@@ -64,6 +65,18 @@ def is_grafana_question(text: str) -> bool:
 
 
 ANOMALY_THRESHOLDS = parse_thresholds(ANOMALY_THRESHOLDS_RAW)
+
+# Last known anomaly (for GitHub issue body)
+_last_anomaly: str = ""
+
+
+def _build_issue_body(grafana_context: str) -> str:
+    parts = ["## Anomaly Report\n\n_Opened via Aria voice assistant._\n"]
+    if _last_anomaly:
+        parts.append(f"### Detected Anomalies\n```\n{_last_anomaly}\n```\n")
+    if grafana_context:
+        parts.append(f"### Dashboard Snapshot\n```\n{grafana_context}\n```\n")
+    return "\n".join(parts)
 
 
 class Backboard:
@@ -305,7 +318,9 @@ async def anomaly_watcher(app: web.Application):
         try:
             anomalies = await app["grafana"].detect_anomalies(ANOMALY_THRESHOLDS)
             if anomalies:
+                global _last_anomaly
                 alert_text = "Heads up. I spotted anomalies. " + ". ".join(anomalies[:3])
+                _last_anomaly = "\n".join(anomalies)
                 await ws_broadcast(app, {"type": "alert", "anomalies": anomalies})
                 await ws_broadcast(app, {"type": "aria", "text": alert_text})
                 try:
@@ -402,20 +417,31 @@ async def handle_ws(request: web.Request):
         await ws_broadcast(app, {"type": "state", "state": "thinking"})
 
         context = ""
-        if is_grafana_question(text):
-            live_context = await build_grafana_context(app["grafana"])
-            incident_memory = await app["backboard"].incident_summary()
-            if incident_memory:
-                context = f"{live_context}\\n\\nPast incident memory:\\n{incident_memory}"
-            else:
-                context = live_context
+        if is_github_command(text):
+            try:
+                grafana_context = await build_grafana_context(app["grafana"])
+                ts = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+                reply = await create_anomaly_issue(
+                    f"Monitoring Alert: {ts}",
+                    _build_issue_body(grafana_context),
+                )
+            except Exception:
+                reply = "I couldn't create the GitHub issue."
+        else:
+            if is_grafana_question(text):
+                live_context = await build_grafana_context(app["grafana"])
+                incident_memory = await app["backboard"].incident_summary()
+                if incident_memory:
+                    context = f"{live_context}\\n\\nPast incident memory:\\n{incident_memory}"
+                else:
+                    context = live_context
 
-        try:
-            reply = await app["backboard"].chat(text, context=context)
-            if not reply:
-                reply = "Sorry, could you repeat that?"
-        except Exception:
-            reply = "I hit an error while processing that request."
+            try:
+                reply = await app["backboard"].chat(text, context=context)
+                if not reply:
+                    reply = "Sorry, could you repeat that?"
+            except Exception:
+                reply = "I hit an error while processing that request."
 
         await ws_broadcast(app, {"type": "aria", "text": reply})
         await ws_broadcast(app, {"type": "state", "state": "listening"})
