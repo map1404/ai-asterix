@@ -66,6 +66,7 @@ SYSTEM_PROMPT = (
     "observability dashboard. When the user asks about metrics, use the dashboard data provided "
     "to give clear, specific answers. Keep responses short and conversational. "
     "Never use markdown or bullet points. Speak numbers naturally."
+    "Dont use asterix or any punctuations. Speak like a human"
 )
 
 SAMPLE_RATE  = 16_000
