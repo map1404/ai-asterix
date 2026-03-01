@@ -4,6 +4,8 @@ import datetime as dt
 import json
 import os
 from pathlib import Path
+from urllib.parse import quote
+import uuid
 
 from aiohttp import WSMsgType, web
 from dotenv import load_dotenv
@@ -23,6 +25,9 @@ ANOMALY_CHECK_INTERVAL = int(os.getenv("ANOMALY_CHECK_INTERVAL", "120"))
 ANOMALY_THRESHOLDS_RAW = os.getenv("ANOMALY_THRESHOLDS", "")
 INCIDENT_MEMORY_ENABLED = os.getenv("INCIDENT_MEMORY_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
 INCIDENT_MEMORY_LOOKBACK_DAYS = int(os.getenv("INCIDENT_MEMORY_LOOKBACK_DAYS", "14"))
+INCIDENT_PAGE_BASE_URL = os.getenv("INCIDENT_PAGE_BASE_URL", "").strip().rstrip("/")
+PAGER_NOTIFY_WEBHOOK_URL = os.getenv("PAGER_NOTIFY_WEBHOOK_URL", "").strip()
+PAGER_AGENT_BOOTSTRAP_URL = os.getenv("PAGER_AGENT_BOOTSTRAP_URL", "").strip()
 
 SYSTEM_PROMPT = (
     f"You are {AGENT_NAME}, a helpful and concise assistant with access to a Grafana "
@@ -145,6 +150,118 @@ class Backboard:
         await self._http.aclose()
 
 
+class IncidentPager:
+    def __init__(self):
+        self.livekit_url = os.getenv("LIVEKIT_URL", "").strip()
+        self.livekit_api_key = os.getenv("LIVEKIT_API_KEY", "").strip()
+        self.livekit_api_secret = os.getenv("LIVEKIT_API_SECRET", "").strip()
+        self.incidents: dict[str, dict] = {}
+        self._livekit = None
+        self._lkapi = None
+        self._http = httpx.AsyncClient(timeout=15.0)
+
+    async def start(self):
+        if not (self.livekit_url and self.livekit_api_key and self.livekit_api_secret):
+            print("[Pager] LiveKit env not fully configured; paging UI works but room joins are disabled.")
+            return
+        try:
+            from livekit import api as lkapi
+            self._lkapi = lkapi
+            self._livekit = lkapi.LiveKitAPI(self.livekit_url, self.livekit_api_key, self.livekit_api_secret)
+            print("[Pager] LiveKit pager ready")
+        except Exception as e:
+            self._livekit = None
+            self._lkapi = None
+            print(f"[Pager] LiveKit init failed: {e}")
+
+    async def close(self):
+        if self._livekit and hasattr(self._livekit, "aclose"):
+            await self._livekit.aclose()
+        await self._http.aclose()
+
+    def _answer_link(self, room_name: str) -> str:
+        suffix = f"/pager?room={quote(room_name)}"
+        if INCIDENT_PAGE_BASE_URL:
+            return f"{INCIDENT_PAGE_BASE_URL}{suffix}"
+        return suffix
+
+    async def create_incident(self, payload: dict) -> dict:
+        severity = (payload.get("severity") or "Sev-1").strip()
+        title = (payload.get("title") or "Production incident detected").strip()
+        summary = (payload.get("summary") or "Potential service degradation detected.").strip()
+        dashboard_url = (payload.get("dashboard_url") or "").strip()
+        requested_id = (payload.get("incident_id") or "").strip()
+        incident_id = requested_id or uuid.uuid4().hex[:8]
+        room_name = (payload.get("room") or f"incident-{incident_id}").strip()
+        created_at = dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+        if self._livekit and self._lkapi:
+            try:
+                await self._livekit.room.create_room(
+                    self._lkapi.CreateRoomRequest(
+                        name=room_name,
+                        empty_timeout=20 * 60,
+                        max_participants=16,
+                    )
+                )
+            except Exception as e:
+                # Room may already exist; keep paging flow alive.
+                print(f"[Pager] create room warning: {e}")
+
+        incident = {
+            "incident_id": incident_id,
+            "severity": severity,
+            "title": title,
+            "summary": summary,
+            "dashboard_url": dashboard_url,
+            "room": room_name,
+            "created_at": created_at,
+            "answer_link": self._answer_link(room_name),
+            "livekit_url": self.livekit_url,
+            "livekit_enabled": bool(self._livekit and self._lkapi),
+            "agent_opening": "You're on-call. Incident Sev-1 detected. Want a 10-second summary or jump to dashboard?",
+        }
+        self.incidents[room_name] = incident
+
+        await self._notify_chatops(incident)
+        await self._start_agent_worker(incident)
+        return incident
+
+    async def _notify_chatops(self, incident: dict):
+        if not PAGER_NOTIFY_WEBHOOK_URL:
+            return
+        text = (
+            f"Incident {incident['severity']} - {incident['title']}\n"
+            f"Summary: {incident['summary']}\n"
+            f"Answer: {incident['answer_link']}"
+        )
+        try:
+            await self._http.post(PAGER_NOTIFY_WEBHOOK_URL, json={"text": text})
+        except Exception as e:
+            print(f"[Pager] chatops notify failed: {e}")
+
+    async def _start_agent_worker(self, incident: dict):
+        if not PAGER_AGENT_BOOTSTRAP_URL:
+            return
+        try:
+            await self._http.post(PAGER_AGENT_BOOTSTRAP_URL, json=incident)
+        except Exception as e:
+            print(f"[Pager] agent bootstrap failed: {e}")
+
+    def issue_livekit_token(self, room_name: str, identity: str, name: str) -> str:
+        if not (self._livekit and self._lkapi):
+            raise RuntimeError("LiveKit is not configured")
+        grants = self._lkapi.VideoGrants(room_join=True, room=room_name)
+        token = (
+            self._lkapi.AccessToken(self.livekit_api_key, self.livekit_api_secret)
+            .with_identity(identity)
+            .with_name(name)
+            .with_grants(grants)
+            .to_jwt()
+        )
+        return token
+
+
 async def build_grafana_context(grafana: GrafanaClient) -> str:
     try:
         values = await grafana.get_all_current_values()
@@ -209,6 +326,49 @@ async def handle_index(_request: web.Request):
 
 async def handle_health(_request: web.Request):
     return web.json_response({"ok": True})
+
+
+async def handle_page(request: web.Request):
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    incident = await request.app["pager"].create_incident(payload)
+    return web.json_response(incident)
+
+
+async def handle_pager(_request: web.Request):
+    html_path = Path(__file__).with_name("pager.html")
+    return web.FileResponse(html_path)
+
+
+async def handle_incident(request: web.Request):
+    room = (request.query.get("room") or "").strip()
+    if not room:
+        return web.json_response({"error": "missing room"}, status=400)
+    incident = request.app["pager"].incidents.get(room)
+    if not incident:
+        return web.json_response({"error": "incident not found"}, status=404)
+    return web.json_response(incident)
+
+
+async def handle_livekit_token(request: web.Request):
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    room = (payload.get("room") or "").strip()
+    name = (payload.get("name") or "On-call Engineer").strip()
+    if not room:
+        return web.json_response({"error": "missing room"}, status=400)
+    identity = f"oncall-{uuid.uuid4().hex[:8]}"
+    try:
+        token = request.app["pager"].issue_livekit_token(room, identity=identity, name=name)
+    except RuntimeError as e:
+        return web.json_response({"error": str(e)}, status=503)
+    except Exception as e:
+        return web.json_response({"error": f"failed to issue token: {e}"}, status=500)
+    return web.json_response({"token": token, "identity": identity, "room": room})
 
 
 async def handle_ws(request: web.Request):
@@ -278,6 +438,9 @@ async def on_startup(app: web.Application):
     app["backboard"] = Backboard()
     await app["backboard"].start()
 
+    app["pager"] = IncidentPager()
+    await app["pager"].start()
+
     app["anomaly_task"] = asyncio.create_task(anomaly_watcher(app))
 
 
@@ -292,12 +455,18 @@ async def on_cleanup(app: web.Application):
         await app["backboard"].close()
     if app.get("grafana"):
         await app["grafana"].close()
+    if app.get("pager"):
+        await app["pager"].close()
 
 
 def create_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_get("/healthz", handle_health)
+    app.router.add_post("/page", handle_page)
+    app.router.add_get("/pager", handle_pager)
+    app.router.add_get("/api/incident", handle_incident)
+    app.router.add_post("/api/livekit/token", handle_livekit_token)
     app.router.add_get("/ws", handle_ws)
 
     app.on_startup.append(on_startup)

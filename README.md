@@ -58,3 +58,39 @@ The web agent can persist anomaly incidents in Backboard and reuse this memory w
 Environment variables:
 - `INCIDENT_MEMORY_ENABLED=true` (default `true`)
 - `INCIDENT_MEMORY_LOOKBACK_DAYS=14` (default `14`)
+
+### Incident Pager Flow (LiveKit)
+
+This app now supports a pager flow:
+- LLM/backend posts to `POST /page`
+- Backend creates a LiveKit room `incident-<id>`
+- Backend can notify Slack/Teams with an answer link
+- On `/pager?room=...`, on-call can tap **Answer** and join the LiveKit room
+
+Example `POST /page` body:
+
+```json
+{
+  "severity": "Sev-1",
+  "title": "API latency spike",
+  "summary": "p95 latency exceeded SLO for 8 minutes",
+  "dashboard_url": "https://your-grafana-url/d/abc123",
+  "incident_id": "123"
+}
+```
+
+Pager endpoints:
+- `POST /page` create incident + room
+- `GET /pager?room=incident-123` answer UI
+- `GET /api/incident?room=incident-123` incident details
+- `POST /api/livekit/token` issue join token
+
+Required LiveKit env vars:
+- `LIVEKIT_URL`
+- `LIVEKIT_API_KEY`
+- `LIVEKIT_API_SECRET`
+
+Optional pager env vars:
+- `INCIDENT_PAGE_BASE_URL` (e.g. `https://your-app.onrender.com`)
+- `PAGER_NOTIFY_WEBHOOK_URL` (Slack/Teams incoming webhook)
+- `PAGER_AGENT_BOOTSTRAP_URL` (webhook to start your agent worker in that room)

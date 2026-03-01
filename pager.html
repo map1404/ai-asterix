@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Incident Pager</title>
+  <style>
+    :root {
+      --bg: #0b1115;
+      --card: #111a21;
+      --text: #e7edf2;
+      --muted: #8da0af;
+      --accent: #18c2ff;
+      --danger: #ff5d6b;
+      --ok: #4fd286;
+      --border: #24313d;
+    }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at 20% 0%, #13202a, var(--bg) 45%);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+    }
+    .card {
+      width: min(760px, 95vw);
+      background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent 35%), var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 22px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+    }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .sev { padding: 6px 10px; border-radius: 999px; font-weight: 700; font-size: 12px; background: rgba(255,93,107,0.14); color: #ff9ba4; border: 1px solid rgba(255,93,107,0.4); }
+    .muted { color: var(--muted); font-size: 14px; }
+    h1 { margin: 10px 0 6px; font-size: 24px; }
+    p { margin: 8px 0; line-height: 1.5; }
+    .box { border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-top: 12px; background: rgba(255,255,255,0.015); }
+    .buttons { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+    button, a.btn {
+      border: 1px solid var(--border);
+      background: #1a2731;
+      color: var(--text);
+      padding: 10px 14px;
+      border-radius: 10px;
+      text-decoration: none;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button.primary { background: linear-gradient(180deg, #1cbcff, #0ea6e9); border-color: #2fc8ff; color: #041019; }
+    button[disabled] { opacity: 0.5; cursor: not-allowed; }
+    .status { margin-top: 12px; font-weight: 600; }
+    .status.ok { color: var(--ok); }
+    .status.err { color: var(--danger); }
+    .status.info { color: var(--accent); }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="row">
+      <span class="sev" id="sev">Sev-1</span>
+      <span class="muted" id="createdAt">-</span>
+      <span class="muted">Room: <code id="room">-</code></span>
+    </div>
+
+    <h1 id="title">Incident</h1>
+    <p id="summary">Loading incident details...</p>
+
+    <div class="box" id="agentIntro">You're on-call. Incident Sev-1 detected. Want a 10-second summary or jump to dashboard?</div>
+
+    <div class="buttons">
+      <button id="answerBtn" class="primary">Answer</button>
+      <button id="ringBtn">Toggle Ringtone</button>
+      <a id="dashBtn" class="btn" href="#" target="_blank" rel="noopener">Open Dashboard</a>
+    </div>
+
+    <div class="status info" id="status">Waiting for action...</div>
+  </main>
+
+  <script src="https://unpkg.com/livekit-client/dist/livekit-client.umd.min.js"></script>
+  <script>
+    const roomName = new URLSearchParams(location.search).get('room') || '';
+    const sevEl = document.getElementById('sev');
+    const createdAtEl = document.getElementById('createdAt');
+    const roomEl = document.getElementById('room');
+    const titleEl = document.getElementById('title');
+    const summaryEl = document.getElementById('summary');
+    const introEl = document.getElementById('agentIntro');
+    const dashBtn = document.getElementById('dashBtn');
+    const answerBtn = document.getElementById('answerBtn');
+    const ringBtn = document.getElementById('ringBtn');
+    const statusEl = document.getElementById('status');
+
+    let incident = null;
+    let room = null;
+    let ringing = false;
+    let ringTimer = null;
+    let audioCtx = null;
+
+    function setStatus(text, kind = 'info') {
+      statusEl.textContent = text;
+      statusEl.className = `status ${kind}`;
+    }
+
+    function beep() {
+      if (!ringing) return;
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 980;
+      gain.gain.value = 0.06;
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      setTimeout(() => osc.stop(), 180);
+    }
+
+    function startRingtone() {
+      if (ringing) return;
+      ringing = true;
+      beep();
+      ringTimer = setInterval(beep, 1100);
+      setStatus('Ringing... tap Answer to join.', 'info');
+    }
+
+    function stopRingtone() {
+      ringing = false;
+      if (ringTimer) clearInterval(ringTimer);
+      ringTimer = null;
+    }
+
+    async function loadIncident() {
+      if (!roomName) {
+        setStatus('Missing room parameter in URL.', 'err');
+        answerBtn.disabled = true;
+        return;
+      }
+      roomEl.textContent = roomName;
+
+      const res = await fetch(`/api/incident?room=${encodeURIComponent(roomName)}`);
+      if (!res.ok) {
+        setStatus('Incident not found.', 'err');
+        answerBtn.disabled = true;
+        return;
+      }
+      incident = await res.json();
+      sevEl.textContent = incident.severity || 'Sev-1';
+      createdAtEl.textContent = incident.created_at || '-';
+      titleEl.textContent = incident.title || 'Incident';
+      summaryEl.textContent = incident.summary || 'No summary available.';
+      introEl.textContent = incident.agent_opening || introEl.textContent;
+      dashBtn.href = incident.dashboard_url || '#';
+      if (!incident.dashboard_url) dashBtn.style.display = 'none';
+      if (!incident.livekit_enabled) {
+        answerBtn.disabled = true;
+        setStatus('LiveKit is not configured on backend.', 'err');
+      } else {
+        setStatus('Incident loaded. Tap Answer.', 'info');
+      }
+    }
+
+    async function answerIncident() {
+      if (!incident) return;
+      startRingtone();
+      setStatus('Requesting call token...', 'info');
+
+      const tokenRes = await fetch('/api/livekit/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ room: incident.room, name: 'On-call Engineer' })
+      });
+      if (!tokenRes.ok) {
+        const err = await tokenRes.json().catch(() => ({}));
+        setStatus(`Unable to answer: ${err.error || tokenRes.status}`, 'err');
+        return;
+      }
+      const { token } = await tokenRes.json();
+
+      setStatus('Joining room...', 'info');
+      room = new LivekitClient.Room();
+      room.on(LivekitClient.RoomEvent.Connected, async () => {
+        stopRingtone();
+        setStatus('Connected to incident room.', 'ok');
+        if ('speechSynthesis' in window && introEl.textContent) {
+          const u = new SpeechSynthesisUtterance(introEl.textContent);
+          u.rate = 0.96;
+          window.speechSynthesis.cancel();
+          window.speechSynthesis.speak(u);
+        }
+        try {
+          await room.localParticipant.setMicrophoneEnabled(true);
+        } catch {
+          setStatus('Connected. Microphone permission denied or unavailable.', 'err');
+        }
+      });
+
+      room.on(LivekitClient.RoomEvent.Disconnected, () => {
+        setStatus('Call ended.', 'info');
+      });
+
+      try {
+        await room.connect(incident.livekit_url, token);
+      } catch (e) {
+        stopRingtone();
+        setStatus(`Join failed: ${e}`, 'err');
+      }
+    }
+
+    answerBtn.addEventListener('click', answerIncident);
+    ringBtn.addEventListener('click', () => {
+      if (ringing) {
+        stopRingtone();
+        setStatus('Ringtone stopped.', 'info');
+      } else {
+        startRingtone();
+      }
+    });
+
+    loadIncident();
+  </script>
+</body>
+</html>
