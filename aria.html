@@ -420,6 +420,10 @@
           id="speakerBtn"
           style="margin-left:8px;background:var(--surface2);color:var(--green);border:1px solid rgba(0,255,170,0.4);padding:8px 10px;border-radius:8px;font-family:'Space Mono',monospace;font-size:0.7rem;cursor:pointer;"
         >Speaker On</button>
+        <button
+          id="echoGuardBtn"
+          style="margin-left:8px;background:var(--surface2);color:var(--green);border:1px solid rgba(0,255,170,0.4);padding:8px 10px;border-radius:8px;font-family:'Space Mono',monospace;font-size:0.7rem;cursor:pointer;"
+        >Echo Guard On</button>
       </div>
 
       <div class="composer" style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:10px;">
@@ -478,6 +482,7 @@
   const sendBtn        = document.getElementById('sendBtn');
   const micBtn         = document.getElementById('micBtn');
   const speakerBtn     = document.getElementById('speakerBtn');
+  const echoGuardBtn   = document.getElementById('echoGuardBtn');
 
   // ── Helpers ──
   function esc(s) {
@@ -576,6 +581,9 @@
   let speakerEnabled = true;
   let preferredVoice = null;
   let micPausedForTTS = false;
+  let echoGuardEnabled = true;
+  let lastSpokenNorm = '';
+  let lastSpokenUntil = 0;
 
   function pickPreferredVoice() {
     if (!('speechSynthesis' in window)) return null;
@@ -609,6 +617,31 @@
     speakerBtn.style.color = active ? 'var(--green)' : 'var(--muted)';
   }
 
+  function setEchoGuardButton(active) {
+    echoGuardBtn.textContent = active ? 'Echo Guard On' : 'Echo Guard Off';
+    echoGuardBtn.style.borderColor = active ? 'rgba(0,255,170,0.4)' : 'var(--border)';
+    echoGuardBtn.style.color = active ? 'var(--green)' : 'var(--muted)';
+  }
+
+  function normalizeText(s) {
+    return String(s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function isLikelyEcho(sttText) {
+    if (!echoGuardEnabled) return false;
+    if (Date.now() > lastSpokenUntil) return false;
+    const stt = normalizeText(sttText);
+    const bot = lastSpokenNorm;
+    if (!stt || !bot) return false;
+    if (stt.length >= 8 && bot.includes(stt)) return true;
+    if (bot.length >= 12 && stt.includes(bot)) return true;
+    const sttWords = stt.split(' ');
+    const botSet = new Set(bot.split(' '));
+    let overlap = 0;
+    for (const w of sttWords) if (w && botSet.has(w)) overlap++;
+    return overlap >= Math.max(3, Math.ceil(sttWords.length * 0.6));
+  }
+
   function pauseMicForSpeech() {
     if (!recognition || !micEnabled) return;
     micPausedForTTS = true;
@@ -629,6 +662,8 @@
     if (!speakerEnabled || !('speechSynthesis' in window)) return;
     const clean = String(text || '').trim();
     if (!clean) return;
+    lastSpokenNorm = normalizeText(clean);
+    lastSpokenUntil = Date.now() + 9000;
     pauseMicForSpeech();
     const u = new SpeechSynthesisUtterance(clean);
     u.voice = preferredVoice;
@@ -689,7 +724,7 @@
       }
 
       const cleanFinal = finalText.trim();
-      if (cleanFinal) sendUserMessage(cleanFinal);
+      if (cleanFinal && !isLikelyEcho(cleanFinal)) sendUserMessage(cleanFinal);
     };
 
     recognition.onerror = (event) => {
@@ -785,6 +820,7 @@
   initRecognition();
   setMicButton(false);
   setSpeakerButton(true);
+  setEchoGuardButton(true);
 
   if ('speechSynthesis' in window) {
     preferredVoice = pickPreferredVoice();
@@ -816,6 +852,11 @@
       resumeMicAfterSpeech();
     }
     setSpeakerButton(speakerEnabled);
+  });
+
+  echoGuardBtn.addEventListener('click', () => {
+    echoGuardEnabled = !echoGuardEnabled;
+    setEchoGuardButton(echoGuardEnabled);
   });
 
   // Auto-start microphone on page load.
