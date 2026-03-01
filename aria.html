@@ -414,6 +414,19 @@
         <div class="mic-status" id="micStatus">Waiting for agent</div>
       </div>
 
+      <div class="composer" style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:10px;">
+        <input
+          id="msgInput"
+          type="text"
+          placeholder="Ask Aria about your dashboard..."
+          style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:10px 12px;border-radius:8px;font-family:'Space Mono',monospace;font-size:0.78rem;outline:none;"
+        />
+        <button
+          id="sendBtn"
+          style="background:var(--accent);color:#03131a;border:none;padding:10px 14px;border-radius:8px;font-family:'Space Mono',monospace;font-weight:700;cursor:pointer;"
+        >Send</button>
+      </div>
+
     </div>
   </div>
 
@@ -453,6 +466,8 @@
   const panelList      = document.getElementById('panelList');
   const alertList      = document.getElementById('alertList');
   const noAlerts       = document.getElementById('noAlerts');
+  const msgInput       = document.getElementById('msgInput');
+  const sendBtn        = document.getElementById('sendBtn');
 
   // ── Helpers ──
   function esc(s) {
@@ -515,6 +530,7 @@
         // Clicking a panel name sends it as a question
         document.querySelectorAll('.panel-item').forEach(el => el.classList.remove('active'));
         div.classList.add('active');
+        sendUserMessage(`Give me the current status of ${name}`);
       });
       panelList.appendChild(div);
     });
@@ -534,8 +550,17 @@
   }
 
   // ── WebSocket ──
-  const WS_URL = 'ws://localhost:8765';
+  const WS_URL = location.protocol.startsWith('http')
+    ? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
+    : 'ws://localhost:8765';
   let ws = null;
+
+  function sendUserMessage(text) {
+    const clean = String(text || '').trim();
+    if (!clean || !ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'user', text: clean }));
+    msgInput.value = '';
+  }
 
   function connect() {
     connPill.className = 'conn-pill connecting';
@@ -600,6 +625,11 @@
   }
 
   connect();
+
+  sendBtn.addEventListener('click', () => sendUserMessage(msgInput.value));
+  msgInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') sendUserMessage(msgInput.value);
+  });
 </script>
 </body>
 </html>
