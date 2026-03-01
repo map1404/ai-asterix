@@ -1,0 +1,3 @@
+[console_scripts]
+sm-metrics = asr_metrics.cli:main
+speechmatics = speechmatics.cli:main
