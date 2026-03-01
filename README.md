@@ -50,3 +50,23 @@ This repo also includes a deployable web service mode:
    - `OPENAI_API_KEY` (if your Backboard flow uses OpenAI directly)
    - Optional: `AGENT_NAME`, `GRAFANA_URL`, `GRAFANA_DASHBOARD_UID`, `ANOMALY_CHECK_INTERVAL`, `ANOMALY_THRESHOLDS`
 5. Open the service URL. The UI is served at `/` and health check at `/healthz`.
+
+### LiveKit outbound alert calls (optional)
+
+When anomaly alerts are detected, the app can trigger an outbound call through LiveKit SIP.
+
+Set these environment variables:
+- `LIVEKIT_ALERT_CALLS_ENABLED=true`
+- `LIVEKIT_URL`
+- `LIVEKIT_API_KEY`
+- `LIVEKIT_API_SECRET`
+- `LIVEKIT_SIP_TRUNK_ID`
+- `ALERT_PHONE_NUMBER` (E.164 format, e.g. `+15551234567`)
+
+Optional:
+- `ALERT_CALL_COOLDOWN_SECONDS` (default `300`)
+- `LIVEKIT_ALERT_ROOM_PREFIX` (default `aria-alert`)
+
+Notes:
+- This creates a LiveKit room and dials the phone number as a SIP participant on alert.
+- Cooldown avoids repeated call spam during ongoing incidents.

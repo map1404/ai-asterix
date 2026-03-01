@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 import httpx
 
 from grafana import GrafanaClient
+from livekit_alerts import LiveKitAlertDialer
 
 
 load_dotenv()
@@ -139,6 +140,15 @@ async def anomaly_watcher(app: web.Application):
                 alert_text = "Heads up. I spotted anomalies. " + ". ".join(anomalies[:3])
                 await ws_broadcast(app, {"type": "alert", "anomalies": anomalies})
                 await ws_broadcast(app, {"type": "aria", "text": alert_text})
+                ok, status = await app["dialer"].place_alert_call(alert_text)
+                print(f"[LiveKit] alert call status: {status}")
+                await ws_broadcast(
+                    app,
+                    {
+                        "type": "sys",
+                        "text": "Outbound alert call started." if ok else f"Alert call skipped ({status}).",
+                    },
+                )
         except Exception:
             pass
         await asyncio.sleep(ANOMALY_CHECK_INTERVAL)
@@ -215,6 +225,9 @@ async def on_startup(app: web.Application):
     app["backboard"] = Backboard()
     await app["backboard"].start()
 
+    app["dialer"] = LiveKitAlertDialer()
+    await app["dialer"].start()
+
     app["anomaly_task"] = asyncio.create_task(anomaly_watcher(app))
 
 
@@ -229,6 +242,8 @@ async def on_cleanup(app: web.Application):
         await app["backboard"].close()
     if app.get("grafana"):
         await app["grafana"].close()
+    if app.get("dialer"):
+        await app["dialer"].close()
 
 
 def create_app() -> web.Application:

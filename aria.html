@@ -804,6 +804,10 @@
         case 'alert':
           addAlert(msg.anomalies || []);
           break;
+
+        case 'sys':
+          if (msg.text) addMessage('sys', msg.text);
+          break;
       }
     };
 
