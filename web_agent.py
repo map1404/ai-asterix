@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import datetime as dt
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,8 @@ AGENT_NAME = os.getenv("AGENT_NAME", "Aria")
 PORT = int(os.getenv("PORT", "8080"))
 ANOMALY_CHECK_INTERVAL = int(os.getenv("ANOMALY_CHECK_INTERVAL", "120"))
 ANOMALY_THRESHOLDS_RAW = os.getenv("ANOMALY_THRESHOLDS", "")
+INCIDENT_MEMORY_ENABLED = os.getenv("INCIDENT_MEMORY_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+INCIDENT_MEMORY_LOOKBACK_DAYS = int(os.getenv("INCIDENT_MEMORY_LOOKBACK_DAYS", "14"))
 
 SYSTEM_PROMPT = (
     f"You are {AGENT_NAME}, a helpful and concise assistant with access to a Grafana "
@@ -62,7 +65,8 @@ ANOMALY_THRESHOLDS = parse_thresholds(ANOMALY_THRESHOLDS_RAW)
 class Backboard:
     def __init__(self):
         self.assistant_id = None
-        self.thread_id = None
+        self.chat_thread_id = None
+        self.memory_thread_id = None
         self._http = httpx.AsyncClient(
             base_url=BACKBOARD_BASE_URL,
             headers={"X-API-Key": BACKBOARD_API_KEY},
@@ -79,16 +83,64 @@ class Backboard:
 
         r = await self._http.post(f"/assistants/{self.assistant_id}/threads", json={})
         r.raise_for_status()
-        self.thread_id = r.json()["thread_id"]
+        self.chat_thread_id = r.json()["thread_id"]
+
+        # Separate thread reserved for incident-memory logging/retrieval.
+        r = await self._http.post(f"/assistants/{self.assistant_id}/threads", json={})
+        r.raise_for_status()
+        self.memory_thread_id = r.json()["thread_id"]
 
     async def chat(self, user_text: str, context: str = "") -> str:
         full_text = f"[Dashboard data]\\n{context}\\n\\n[User question]\\n{user_text}" if context else user_text
         r = await self._http.post(
-            f"/threads/{self.thread_id}/messages",
+            f"/threads/{self.chat_thread_id}/messages",
             data={"content": full_text, "stream": "false"},
         )
         r.raise_for_status()
         return (r.json().get("content") or "").strip()
+
+    async def log_incident(self, anomalies: list[str], dashboard_snapshot: str = "") -> str:
+        if not INCIDENT_MEMORY_ENABLED or not self.memory_thread_id:
+            return "disabled"
+
+        ts = dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+        lines = [
+            "You are an incident memory logger.",
+            "Store this as a new incident record for future recall.",
+            "Respond with exactly: ACK",
+            "",
+            f"timestamp_utc: {ts}",
+            f"anomaly_count: {len(anomalies)}",
+            "anomalies:",
+        ]
+        lines.extend([f"- {a}" for a in anomalies[:10]])
+        if dashboard_snapshot:
+            lines.extend(["", "dashboard_snapshot:", dashboard_snapshot[:2000]])
+
+        r = await self._http.post(
+            f"/threads/{self.memory_thread_id}/messages",
+            data={"content": "\\n".join(lines), "stream": "false"},
+        )
+        r.raise_for_status()
+        return (r.json().get("content") or "").strip()
+
+    async def incident_summary(self) -> str:
+        if not INCIDENT_MEMORY_ENABLED or not self.memory_thread_id:
+            return ""
+
+        prompt = (
+            "Summarize the most important incident patterns from memory for the last "
+            f"{INCIDENT_MEMORY_LOOKBACK_DAYS} days in at most 5 short lines. "
+            "Include recurring panels/metrics and severity trend. "
+            "If no stored incidents, reply exactly: NO_INCIDENT_MEMORY"
+        )
+        r = await self._http.post(
+            f"/threads/{self.memory_thread_id}/messages",
+            data={"content": prompt, "stream": "false"},
+        )
+        r.raise_for_status()
+        out = (r.json().get("content") or "").strip()
+        return "" if out == "NO_INCIDENT_MEMORY" else out
 
     async def close(self):
         await self._http.aclose()
@@ -140,6 +192,12 @@ async def anomaly_watcher(app: web.Application):
                 alert_text = "Heads up. I spotted anomalies. " + ". ".join(anomalies[:3])
                 await ws_broadcast(app, {"type": "alert", "anomalies": anomalies})
                 await ws_broadcast(app, {"type": "aria", "text": alert_text})
+                try:
+                    snapshot = await build_grafana_context(app["grafana"])
+                    mem_status = await app["backboard"].log_incident(anomalies, dashboard_snapshot=snapshot)
+                    print(f"[Backboard] incident logged: {mem_status}")
+                except Exception as e:
+                    print(f"[Backboard] incident log failed: {e}")
                 ok, status = await app["dialer"].place_alert_call(alert_text)
                 print(f"[LiveKit] alert call status: {status}")
                 await ws_broadcast(
@@ -195,7 +253,12 @@ async def handle_ws(request: web.Request):
 
         context = ""
         if is_grafana_question(text):
-            context = await build_grafana_context(app["grafana"])
+            live_context = await build_grafana_context(app["grafana"])
+            incident_memory = await app["backboard"].incident_summary()
+            if incident_memory:
+                context = f"{live_context}\\n\\nPast incident memory:\\n{incident_memory}"
+            else:
+                context = live_context
 
         try:
             reply = await app["backboard"].chat(text, context=context)

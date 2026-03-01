@@ -70,3 +70,11 @@ Optional:
 Notes:
 - This creates a LiveKit room and dials the phone number as a SIP participant on alert.
 - Cooldown avoids repeated call spam during ongoing incidents.
+
+### Backboard incident memory (optional)
+
+The web agent can persist anomaly incidents in Backboard and reuse this memory when users ask about metrics.
+
+Environment variables:
+- `INCIDENT_MEMORY_ENABLED=true` (default `true`)
+- `INCIDENT_MEMORY_LOOKBACK_DAYS=14` (default `14`)
