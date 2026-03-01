@@ -12,6 +12,7 @@ import httpx
 from grafana import GrafanaClient
 from livekit_alerts import LiveKitAlertDialer
 from mcp_github import create_anomaly_issue, is_github_command
+from slack_notifier import notify_slack
 
 
 load_dotenv()
@@ -156,6 +157,8 @@ async def anomaly_watcher(app: web.Application):
                 _last_anomaly = "\n".join(anomalies)
                 await ws_broadcast(app, {"type": "alert", "anomalies": anomalies})
                 await ws_broadcast(app, {"type": "aria", "text": alert_text})
+                grafana_ctx = await build_grafana_context(app["grafana"])
+                asyncio.create_task(notify_slack(anomalies, grafana_ctx))
                 ok, status = await app["dialer"].place_alert_call(alert_text)
                 print(f"[LiveKit] alert call status: {status}")
                 await ws_broadcast(
