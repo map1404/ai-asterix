@@ -35,6 +35,7 @@ from speechmatics.models import AudioSettings, ConnectionSettings, Transcription
 
 from grafana import GrafanaClient
 from mcp_github import create_anomaly_issue, is_github_command
+from slack_notifier import notify_slack
 
 # ── Setup ──────────────────────────────────────────────────────────────
 load_dotenv()
@@ -336,6 +337,8 @@ async def anomaly_watcher(grafana: GrafanaClient):
                 _last_anomaly = "\n".join(anomalies)
                 await broadcast({"type": "alert", "anomalies": anomalies})
                 await speak(alert_text)
+                grafana_ctx = await build_grafana_context(grafana)
+                asyncio.create_task(notify_slack(anomalies, grafana_ctx))
         except Exception as e:
             print(f"[Anomaly watcher error] {e}")
 

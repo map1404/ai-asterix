@@ -13,6 +13,7 @@ import httpx
 
 from grafana import GrafanaClient
 from mcp_github import create_anomaly_issue, is_github_command
+from slack_notifier import notify_slack
 
 
 load_dotenv()
@@ -329,6 +330,8 @@ async def anomaly_watcher(app: web.Application):
                     print(f"[Backboard] incident logged: {mem_status}")
                 except Exception as e:
                     print(f"[Backboard] incident log failed: {e}")
+                grafana_ctx = await build_grafana_context(app["grafana"])
+                asyncio.create_task(notify_slack(anomalies, grafana_ctx))
         except Exception:
             pass
         await asyncio.sleep(ANOMALY_CHECK_INTERVAL)
