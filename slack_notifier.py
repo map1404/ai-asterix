@@ -21,6 +21,20 @@ import httpx
 
 log = logging.getLogger(__name__)
 
+SLACK_TRIGGER_PHRASES = [
+    "send to slack",
+    "post to slack",
+    "notify slack",
+    "send alert to slack",
+    "send this to slack",
+    "share in slack",
+]
+
+
+def is_slack_command(text: str) -> bool:
+    t = text.lower()
+    return any(phrase in t for phrase in SLACK_TRIGGER_PHRASES)
+
 
 async def notify_slack(anomalies: list[str], grafana_context: str = "") -> None:
     """Post an anomaly alert to the configured Slack channel."""
@@ -72,3 +86,18 @@ async def notify_slack(anomalies: list[str], grafana_context: str = "") -> None:
         log.info("[Slack] Anomaly notification sent (%d anomalies)", len(anomalies))
     except Exception as e:
         log.error("[Slack] Failed to send notification: %s", e)
+
+
+async def notify_slack_from_voice(anomalies: list[str], grafana_context: str = "") -> str:
+    """
+    Voice-triggered Slack notification with a user-friendly status message.
+    """
+    webhook_url = os.getenv("SLACK_WEBHOOK_URL")
+    if not webhook_url:
+        return "Slack is not configured. Set SLACK_WEBHOOK_URL first."
+
+    try:
+        await notify_slack(anomalies, grafana_context=grafana_context)
+        return "Done. I sent the alert to Slack."
+    except Exception as e:
+        return f"I couldn't send to Slack. Error: {e}"

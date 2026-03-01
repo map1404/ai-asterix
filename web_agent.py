@@ -13,7 +13,7 @@ import httpx
 
 from grafana import GrafanaClient
 from mcp_github import create_anomaly_issue, is_github_command
-from slack_notifier import notify_slack
+from slack_notifier import is_slack_command, notify_slack, notify_slack_from_voice
 
 
 load_dotenv()
@@ -420,7 +420,16 @@ async def handle_ws(request: web.Request):
         await ws_broadcast(app, {"type": "state", "state": "thinking"})
 
         context = ""
-        if is_github_command(text):
+        if is_slack_command(text):
+            try:
+                grafana_context = await build_grafana_context(app["grafana"])
+                anomalies = [x for x in _last_anomaly.splitlines() if x.strip()]
+                if not anomalies:
+                    anomalies = ["Manual alert requested by voice command."]
+                reply = await notify_slack_from_voice(anomalies, grafana_context=grafana_context)
+            except Exception:
+                reply = "I couldn't send the Slack notification."
+        elif is_github_command(text):
             try:
                 grafana_context = await build_grafana_context(app["grafana"])
                 ts = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
