@@ -7,17 +7,17 @@
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet" />
 <style>
   :root {
-    --bg: #080a0f;
-    --surface: #0e1118;
-    --surface2: #12161f;
-    --border: #1e2433;
-    --accent: #00e5ff;
-    --accent2: #7b61ff;
-    --text: #e8eaf0;
-    --muted: #5a6070;
-    --danger: #ff4060;
-    --green: #00ffaa;
-    --orange: #ffaa00;
+    --bg: #071018;
+    --surface: #0f1b25;
+    --surface2: #142432;
+    --border: #264050;
+    --accent: #27dcff;
+    --accent2: #7f8bff;
+    --text: #e8f2f8;
+    --muted: #7792a6;
+    --danger: #ff5f74;
+    --green: #3dffb5;
+    --orange: #ffbc6a;
   }
 
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -94,11 +94,14 @@
     grid-template-columns: 260px 1fr;
     gap: 0;
     overflow: hidden;
+    padding: 10px;
   }
 
   /* ── SIDEBAR ── */
   .sidebar {
-    border-right: 1px solid var(--border);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.008));
     display: flex; flex-direction: column;
     overflow: hidden;
   }
@@ -142,6 +145,10 @@
 
   /* ── CHAT AREA ── */
   .chat-area {
+    margin-left: 10px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: radial-gradient(1200px 280px at 50% -140px, rgba(39,220,255,0.1), transparent 65%), rgba(255,255,255,0.01);
     display: flex; flex-direction: column; overflow: hidden;
   }
 
@@ -168,6 +175,32 @@
   @keyframes fadeUp {
     from { opacity: 0; transform: translateY(12px); }
     to   { opacity: 1; transform: none; }
+  }
+
+  .kpi-grid {
+    margin-top: 16px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .kpi {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    background: rgba(255,255,255,0.015);
+  }
+  .kpi-label {
+    font-size: 0.6rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .kpi-value {
+    margin-top: 6px;
+    font-family: 'Syne', sans-serif;
+    font-size: 1.08rem;
+    letter-spacing: -0.02em;
+    color: var(--text);
   }
 
   /* Titlebar */
@@ -230,6 +263,18 @@
   .msg.alert-msg .msg-label { color: var(--orange); }
 
   .msg-text { font-size: 0.82rem; line-height: 1.65; color: var(--text); }
+  .msg.aria .msg-text {
+    background: rgba(39,220,255,0.09);
+    border: 1px solid rgba(39,220,255,0.22);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+  .msg.user .msg-text {
+    background: rgba(127,139,255,0.14);
+    border: 1px solid rgba(127,139,255,0.3);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
   .msg.sys   .msg-text { color: var(--muted); font-style: italic; }
   .msg.alert-msg .msg-text { color: var(--orange); }
 
@@ -316,6 +361,8 @@
   @media (max-width: 700px) {
     .body { grid-template-columns: 1fr; }
     .sidebar { display: none; }
+    .chat-area { margin-left: 0; }
+    .kpi-grid { grid-template-columns: 1fr; }
   }
 </style>
 </head>
@@ -377,6 +424,20 @@
       <div class="hero-strip">
         <div class="hero-tag">Observability voice agent</div>
         <h1 class="hero-title">Talk to <span class="glow">Aria</span><span class="dim">.</span></h1>
+        <div class="kpi-grid">
+          <div class="kpi">
+            <div class="kpi-label">Panels Loaded</div>
+            <div class="kpi-value" id="kpiPanels">0</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Alerts Seen</div>
+            <div class="kpi-value" id="kpiAlerts">0</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Session State</div>
+            <div class="kpi-value" id="kpiState">offline</div>
+          </div>
+        </div>
       </div>
 
       <div class="card-titlebar">
@@ -483,6 +544,10 @@
   const micBtn         = document.getElementById('micBtn');
   const speakerBtn     = document.getElementById('speakerBtn');
   const echoGuardBtn   = document.getElementById('echoGuardBtn');
+  const kpiPanels      = document.getElementById('kpiPanels');
+  const kpiAlerts      = document.getElementById('kpiAlerts');
+  const kpiState       = document.getElementById('kpiState');
+  let alertCount       = 0;
 
   // ── Helpers ──
   function esc(s) {
@@ -520,6 +585,7 @@
     const map = { listening: 'Listening...', thinking: 'Thinking...', speaking: 'Speaking...', offline: 'Waiting for agent' };
     micStatus.textContent = map[state] || state;
     micStatus.className = `mic-status ${state}`;
+    kpiState.textContent = state;
   }
 
   function setConnected(yes) {
@@ -549,11 +615,14 @@
       });
       panelList.appendChild(div);
     });
+    kpiPanels.textContent = String(names.length);
   }
 
   // ── Anomaly alerts ──
   function addAlert(anomalies) {
     noAlerts.style.display = 'none';
+    alertCount += anomalies.length;
+    kpiAlerts.textContent = String(alertCount);
     anomalies.forEach(text => {
       const div = document.createElement('div');
       div.className = 'alert-item';
