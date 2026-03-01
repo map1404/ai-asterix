@@ -53,7 +53,7 @@ async def create_anomaly_issue(title: str, body: str) -> str:
     Create a GitHub issue via the REST API and return a spoken confirmation.
     No-op with a friendly message if env vars are not set.
     """
-    token = os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN")
+    token = os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN") or os.getenv("GITHUB_TOKEN")
     repo_full = os.getenv("GITHUB_REPO")
 
     if not token or not repo_full:
@@ -75,6 +75,7 @@ async def create_anomaly_issue(title: str, body: str) -> str:
                     "Authorization": f"Bearer {token}",
                     "Accept": "application/vnd.github+json",
                     "X-GitHub-Api-Version": "2022-11-28",
+                    "User-Agent": "aria-voice-agent",
                 },
                 json={"title": title, "body": body},
             )
@@ -91,7 +92,19 @@ async def create_anomaly_issue(title: str, body: str) -> str:
 
     except httpx.HTTPStatusError as e:
         log.error("[GitHub] API error %s: %s", e.response.status_code, e.response.text)
-        return f"GitHub returned an error: {e.response.status_code}. Check your token and repo name."
+        detail = ""
+        try:
+            detail = (e.response.json() or {}).get("message", "")
+        except Exception:
+            detail = ""
+
+        if e.response.status_code == 403:
+            return (
+                "GitHub returned 403 Forbidden. "
+                "Check token permissions (Issues: Read and Write), repository access, and SSO authorization. "
+                f"{('GitHub says: ' + detail) if detail else ''}"
+            ).strip()
+        return f"GitHub returned an error: {e.response.status_code}. {detail}".strip()
     except Exception as e:
         log.error("[GitHub] Failed to create issue: %s", e)
         return f"I couldn't create the GitHub issue. Error: {e}"
