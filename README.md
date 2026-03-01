@@ -8,7 +8,7 @@ Speak to an AI agent directly from your terminal. No servers, no LiveKit.
 ## Setup
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-local.txt
 cp .env.example .env   # fill in your three API keys
 python agent.py
 ```
@@ -42,7 +42,7 @@ This repo also includes a deployable web service mode:
 1. Push this repo to GitHub.
 2. In Render, create a new **Web Service** from the repo.
 3. Render will detect `render.yaml` and use:
-   - Build: `pip install -r requirements.txt`
+   - Build: `pip install -r requirements-render.txt`
    - Start: `python web_agent.py`
 4. Add required environment variables in Render:
    - `BACKBOARD_API_KEY`
